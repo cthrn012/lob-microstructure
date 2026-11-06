@@ -50,6 +50,11 @@ Rscript -e 'rmarkdown::render("report/report.Rmd")'   # full HTML report
 Rscript -e 'testthat::test_dir("tests/testthat")'     # tests
 ```
 
+The HTML report also needs [pandoc](https://pandoc.org/installing.html) 2.8 or
+newer. It isn't an R package, so `install.R` can't install it, but RStudio
+includes a copy. The report reads `output/lob.sqlite`, so it describes whichever
+dataset `run_all.R` processed last.
+
 Outputs:
 
 - `output/lob.sqlite`: every intermediate table, ready to query

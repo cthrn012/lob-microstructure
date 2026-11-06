@@ -13,3 +13,7 @@ if (length(still_missing)) {
 }
 message("All packages installed.")
 message("Optional: install.packages('duckdb') to run the same SQL on DuckDB.")
+if (!rmarkdown::pandoc_available("2.8")) {
+  message("Note: the HTML report needs pandoc 2.8 or newer, which is not an R ",
+          "package. Get it from https://pandoc.org/installing.html")
+}
