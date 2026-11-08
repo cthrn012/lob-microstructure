@@ -17,12 +17,12 @@ PAL <- c("#2a6f97", "#e07a5f", "#3d405b", "#81b29a", "#f2cc8f")
 
 plot_spread_distribution <- function(res) {
   d <- res$spreads
-  d$share <- d$n / sum(d$n)
+  d$share <- d$ms / sum(d$ms)
   ggplot2::ggplot(d, ggplot2::aes(factor(spread_ticks), share)) +
     ggplot2::geom_col(fill = PAL[1], width = 0.7) +
     ggplot2::scale_y_continuous(labels = function(x) paste0(round(100 * x), "%")) +
     ggplot2::labs(title = "Quoted spread distribution",
-                  subtitle = "Share of book updates at each spread",
+                  subtitle = "Share of trading time at each spread",
                   x = "Spread (ticks)", y = NULL) +
     theme_lob()
 }
@@ -35,8 +35,8 @@ plot_imbalance <- function(res) {
     ggplot2::geom_point(size = 2) +
     ggplot2::scale_color_manual(values = PAL[1:2], name = NULL) +
     ggplot2::scale_y_continuous(limits = c(0, 1)) +
-    ggplot2::labs(title = "Queue imbalance predicts the next mid-price move",
-                  subtitle = "P(next mid change is up) by imbalance decile",
+    ggplot2::labs(title = "Queue imbalance and the next mid-price move",
+                  subtitle = "P(next mid change is up) by imbalance decile, one sample per move",
                   x = "Average imbalance in decile", y = "P(next move up)") +
     theme_lob()
 }

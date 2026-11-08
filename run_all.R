@@ -35,6 +35,11 @@ info <- load_lobster(con, files$message_file, files$orderbook_file)
 message(sprintf("loaded %s messages, %d book levels",
                 format(info$n_messages, big.mark = ","), info$levels))
 
+DBI::dbWriteTable(con, "run_info", overwrite = TRUE, data.frame(
+  source = sub("_message_\\d+\\.csv$", "", basename(files$message_file)),
+  simulated = length(args) == 0
+))
+
 run_pipeline(con, "sql")
 
 message("fitting models and drawing figures...")

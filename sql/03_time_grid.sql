@@ -2,7 +2,7 @@
 -- 03_time_grid.sql
 -- A regular 1-second clock. Each row holds the state as of the END of that
 -- second: the last mid quote and the last traded price seen so far
--- (forward-filled). Used for impact horizons and realized volatility.
+-- (forward-filled). Used for realized volatility and intraday patterns.
 --
 -- Forward fill without engine-specific IGNORE NULLS: COUNT(x) over a running
 -- window only increments on non-NULL rows, so it labels each run of "x then

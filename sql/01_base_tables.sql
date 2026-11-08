@@ -42,7 +42,7 @@ WHERE b.bid_size > 0
   AND b.ask_price > b.bid_price;   -- drop one-sided / crossed snapshots
 
 CREATE INDEX IF NOT EXISTS idx_tob_event ON tob(event_id);
-CREATE INDEX IF NOT EXISTS idx_tob_tms ON tob(t_ms);
+CREATE INDEX IF NOT EXISTS idx_tob_tms ON tob(t_ms, event_id);
 
 -- Every execution (visible type 4, hidden type 5).
 -- LOBSTER `direction` is the side of the RESTING order, so the aggressor's
