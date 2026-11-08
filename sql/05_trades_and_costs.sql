@@ -10,12 +10,18 @@
 --   price impact(h)   =     sign * (mid_{t+h} - mid_pre)   / mid_pre
 -- with  effective spread = realized spread + 2 * impact(5s):  what liquidity
 -- providers earn vs. what they lose to informed flow (adverse selection).
+-- mid_{t+h} is the last quote at or before (trade time + h), so each horizon is
+-- exactly h after the trade. Horizons that run past the last quote are NULL.
+--
+-- Hidden executions (type 5) are tracked per trade. LOBSTER reports their
+-- direction, but many execute at the mid, where the price can't confirm it, so
+-- costs are also reported separately for visible-only trades.
 -- =============================================================================
 
 DROP TABLE IF EXISTS trades;
 CREATE TABLE trades AS
 WITH f AS (
-    SELECT event_id, time, t_ms, size, price, sign,
+    SELECT event_id, time, t_ms, type, size, price, sign,
            LAG(event_id) OVER (ORDER BY event_id) AS prev_event,
            LAG(time)     OVER (ORDER BY event_id) AS prev_time,
            LAG(sign)     OVER (ORDER BY event_id) AS prev_sign
@@ -38,23 +44,69 @@ SELECT trade_id,
        SUM(price * size) / SUM(size) AS vwap,
        MIN(price) AS min_price,
        MAX(price) AS max_price,
-       COUNT(*) AS n_fills
+       COUNT(*) AS n_fills,
+       SUM(CASE WHEN type = 5 THEN 1 ELSE 0 END) AS n_hidden_fills
 FROM g
 GROUP BY trade_id;
 
 CREATE INDEX IF NOT EXISTS idx_trades_id ON trades(trade_id);
 
+-- The quote in force at each horizon after each trade: the last book state at
+-- or before (trade time + h). Done in one sorted pass instead of a lookup per
+-- trade: merge the target times into the stream of book states, and carry the
+-- latest event_id forward. event_id grows with time, so a running MAX works,
+-- and book states sort before targets at the same millisecond (at or before).
+DROP TABLE IF EXISTS trade_horizons;
+CREATE TABLE trade_horizons AS
+WITH hz(h) AS (
+    VALUES (1000), (5000), (30000), (60000)
+),
+stream AS (
+    SELECT t_ms AS ts, 0 AS kind, event_id,
+           CAST(NULL AS INTEGER) AS trade_id, CAST(NULL AS INTEGER) AS h
+    FROM tob
+    UNION ALL
+    SELECT tr.t_ms + hz.h, 1, CAST(NULL AS INTEGER), tr.trade_id, hz.h
+    FROM trades tr
+    CROSS JOIN hz
+),
+filled AS (
+    SELECT kind, trade_id, h,
+           MAX(event_id) OVER (ORDER BY ts, kind ROWS UNBOUNDED PRECEDING) AS ev
+    FROM stream
+)
+SELECT trade_id,
+       MAX(CASE WHEN h = 1000  THEN ev END) AS ev_1s,
+       MAX(CASE WHEN h = 5000  THEN ev END) AS ev_5s,
+       MAX(CASE WHEN h = 30000 THEN ev END) AS ev_30s,
+       MAX(CASE WHEN h = 60000 THEN ev END) AS ev_60s
+FROM filled
+WHERE kind = 1
+GROUP BY trade_id;
+
+CREATE INDEX IF NOT EXISTS idx_trade_horizons_id ON trade_horizons(trade_id);
+
 DROP TABLE IF EXISTS trade_costs;
 CREATE TABLE trade_costs AS
-WITH anchors AS (
+WITH last_quote AS (
+    SELECT MAX(t_ms) AS last_ms FROM tob
+),
+anchors AS (
     SELECT t.*,
            (SELECT MAX(q.event_id) FROM tob q WHERE q.event_id < t.first_event) AS pre_event,
-           (SELECT MIN(q.event_id) FROM tob q WHERE q.event_id >= t.last_event) AS post_event
+           (SELECT MIN(q.event_id) FROM tob q WHERE q.event_id >= t.last_event) AS post_event,
+           h.ev_1s, h.ev_5s, h.ev_30s, h.ev_60s,
+           l.last_ms
     FROM trades t
+    JOIN trade_horizons h ON h.trade_id = t.trade_id
+    CROSS JOIN last_quote l
 ),
 q AS (
-    SELECT a.trade_id, a.t_ms, a.sign, a.size, a.vwap, a.n_fills,
-           a.t_ms - a.t_ms % 1000 AS sec_ms,
+    SELECT a.trade_id, a.t_ms, a.sign, a.size, a.vwap, a.n_fills, a.n_hidden_fills,
+           CASE WHEN a.n_hidden_fills = 0 THEN 'visible only'
+                WHEN a.n_hidden_fills = a.n_fills THEN 'hidden only'
+                ELSE 'mixed' END AS liquidity,
+           a.last_ms, a.ev_1s, a.ev_5s, a.ev_30s, a.ev_60s,
            pre.bid AS pre_bid, pre.ask AS pre_ask, pre.mid AS pre_mid,
            pre.spread AS pre_spread,
            CASE WHEN a.sign = 1 THEN pre.ask_size ELSE pre.bid_size END AS pre_touch_size,
@@ -63,7 +115,9 @@ q AS (
     JOIN tob pre       ON pre.event_id = a.pre_event
     LEFT JOIN tob post ON post.event_id = a.post_event
 )
-SELECT q.*,
+SELECT q.trade_id, q.t_ms, q.sign, q.size, q.vwap, q.n_fills, q.n_hidden_fills,
+       q.liquidity, q.pre_bid, q.pre_ask, q.pre_mid, q.pre_spread,
+       q.pre_touch_size, q.post_mid,
        q.size * 1.0 / NULLIF(q.pre_touch_size, 0) AS size_to_touch,
        CASE WHEN q.n_fills > 0 AND (q.vwap > q.pre_ask OR q.vwap < q.pre_bid)
             THEN 1 ELSE 0 END AS walked_book,
@@ -75,10 +129,22 @@ SELECT q.*,
        10000.0 * q.sign * (g30.mid - q.pre_mid) / q.pre_mid     AS impact_30s_bps,
        10000.0 * q.sign * (g60.mid - q.pre_mid) / q.pre_mid     AS impact_60s_bps
 FROM q
-LEFT JOIN time_grid g1  ON g1.sec_ms  = q.sec_ms + 1000
-LEFT JOIN time_grid g5  ON g5.sec_ms  = q.sec_ms + 5000
-LEFT JOIN time_grid g30 ON g30.sec_ms = q.sec_ms + 30000
-LEFT JOIN time_grid g60 ON g60.sec_ms = q.sec_ms + 60000;
+LEFT JOIN tob g1  ON g1.event_id  = q.ev_1s  AND q.t_ms + 1000  <= q.last_ms
+LEFT JOIN tob g5  ON g5.event_id  = q.ev_5s  AND q.t_ms + 5000  <= q.last_ms
+LEFT JOIN tob g30 ON g30.event_id = q.ev_30s AND q.t_ms + 30000 <= q.last_ms
+LEFT JOIN tob g60 ON g60.event_id = q.ev_60s AND q.t_ms + 60000 <= q.last_ms;
+
+-- Costs split by whether a trade hit hidden orders.
+DROP TABLE IF EXISTS costs_by_liquidity;
+CREATE TABLE costs_by_liquidity AS
+SELECT liquidity,
+       COUNT(*) AS n_trades,
+       AVG(eff_spread_bps) AS eff_spread_bps,
+       AVG(real_spread_5s_bps) AS real_spread_5s_bps,
+       AVG(impact_5s_bps) AS impact_5s_bps
+FROM trade_costs
+GROUP BY liquidity
+ORDER BY liquidity;
 
 -- Average impact path by trade-size bucket (the "impact curve").
 -- Fixed buckets, not deciles: real trade sizes pile up on round lots (often

@@ -41,18 +41,39 @@ JOIN tob t      ON t.event_id = n.event_id
 JOIN depth d    ON d.event_id = n.event_id
 JOIN changes ch ON ch.change_no = n.n_changes + 1;
 
--- Probability that the next move is UP, by imbalance decile.
+-- One observation per mid move. Every book state between two moves is waiting
+-- for the same next move, so counting them all treats one outcome as thousands
+-- of independent predictions. Keep the first state with a non-zero imbalance
+-- after the previous move: it is the earliest forecast of that move, made
+-- before the queue has visibly drained.
+DROP TABLE IF EXISTS imbalance_per_move;
+CREATE TABLE imbalance_per_move AS
+WITH r AS (
+    SELECT *,
+           ROW_NUMBER() OVER (PARTITION BY event_id + events_until_move
+                              ORDER BY event_id) AS rn
+    FROM imbalance_signal
+    WHERE imb_l1 <> 0
+)
+SELECT event_id, imb_l1, imb_weighted, micro_tilt, spread_ticks,
+       next_move, events_until_move
+FROM r
+WHERE rn = 1;
+
+-- Probability that the next move is UP, by imbalance decile (one row per move).
+-- Many states share the same imbalance, so ties are broken by event_id to make
+-- the deciles reproducible on any engine.
 DROP TABLE IF EXISTS imbalance_deciles;
 CREATE TABLE imbalance_deciles AS
 WITH l1 AS (
     SELECT 'L1 queue imbalance' AS measure, imb_l1 AS x, next_move,
-           NTILE(10) OVER (ORDER BY imb_l1) AS decile
-    FROM imbalance_signal
+           NTILE(10) OVER (ORDER BY imb_l1, event_id) AS decile
+    FROM imbalance_per_move
 ),
 w AS (
     SELECT 'Depth-weighted imbalance' AS measure, imb_weighted AS x, next_move,
-           NTILE(10) OVER (ORDER BY imb_weighted) AS decile
-    FROM imbalance_signal
+           NTILE(10) OVER (ORDER BY imb_weighted, event_id) AS decile
+    FROM imbalance_per_move
     WHERE imb_weighted IS NOT NULL
 ),
 u AS (
