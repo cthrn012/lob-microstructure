@@ -15,10 +15,14 @@ jobs:
         with:
           use-public-rspm: true
 
+      # pak installs prebuilt binaries and any system libraries they need.
       - name: Install packages
         run: |
-          Rscript install.R
-          Rscript -e 'install.packages("duckdb")'
+          Rscript -e 'install.packages("pak")'
+          Rscript -e 'pak::pkg_install(c("DBI", "RSQLite", "ggplot2", "rmarkdown", "knitr", "testthat", "duckdb"))'
+
+      - name: Check install.R finds everything
+        run: Rscript install.R
 
       - name: Tests (SQLite and DuckDB)
         run: Rscript -e 'testthat::test_dir("tests/testthat", stop_on_failure = TRUE)'

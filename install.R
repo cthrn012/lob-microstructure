@@ -1,7 +1,12 @@
 # Install the R packages this project uses.
-# A CRAN mirror is set explicitly: `Rscript` is non-interactive and cannot
-# prompt you to choose one.
-options(repos = c(CRAN = "https://cloud.r-project.org"))
+# `Rscript` is non-interactive and can't prompt for a CRAN mirror, so set one
+# if none is configured. A mirror that is already set (for example a binary
+# package repository on CI) is kept.
+repos <- getOption("repos")
+if (is.null(repos) || !nzchar(repos["CRAN"]) || is.na(repos["CRAN"]) ||
+    repos["CRAN"] == "@CRAN@") {
+  options(repos = c(CRAN = "https://cloud.r-project.org"))
+}
 
 pkgs <- c("DBI", "RSQLite", "ggplot2", "rmarkdown", "knitr", "testthat")
 missing <- setdiff(pkgs, rownames(installed.packages()))
